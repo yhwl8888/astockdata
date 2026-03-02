@@ -12,6 +12,7 @@ import time
 import random
 from pathlib import Path
 from datetime import datetime
+from pprint import pprint
 
 # 1. 获取当前时间
 now = datetime.now()
@@ -42,97 +43,49 @@ class StockAnalyzer:
     def _get_csi500_codes(self):
         return ak.index_stock_cons_csindex(symbol="000500")["成分券代码"].unique()
 
-    # === 1. 基础行情与历史数据 ===
-    def stock_zh_a_daily(self, symbol="sz000001", start_date="20230101", end_date="20231231"):
-        """A股日频历史行情"""
+    def board(self):
         func_name = _get_func_name()
         logger.info(f"executing function : {func_name}")
-        # return ak.stock_zh_a_daily(symbol=symbol, start_date=start_date, end_date=end_date)
+        _md = f"{a_stock_dir}/{func_name}.md"
 
-    def stock_zh_a_spot_em(self):
-        """A股实时行情数据"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_zh_a_spot_em()
+        spot = ak.stock_sector_spot()
+        with open(_md, "w", encoding="utf-8") as f:
+            f.write("# sina 板块行情\n")
+            f.write("\n")
+            f.write(spot.to_markdown(index=False, tablefmt="github"))
 
-    def stock_zh_a_hist_min_em(self, symbol="000001", period="15"):
-        """A股分时历史行情(1, 5, 15, 30, 60分钟)"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_zh_a_hist_min_em(symbol=symbol, period=period)
+        stock_board_industry_summary_ths_df = ak.stock_board_industry_summary_ths()
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write("\n# 同花顺 板块行情\n")
+            f.write("\n")
+            f.write(stock_board_industry_summary_ths_df.to_markdown(index=False, tablefmt="github"))
 
-    # === 2. 财务基本面数据 ===
-    def stock_financial_abstract(self, symbol="000001"):
-        """财务摘要"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_financial_abstract(symbol=symbol)
+        # north = ak.stock_hsgt_fund_min_em(symbol="北向资金")
+        # with open(_md, "a", encoding="utf-8") as f:
+        #     f.write("\n# 北向资金\n")
+        #     f.write("\n")
+        #     f.write(north.to_markdown(index=False, tablefmt="github"))
 
-    def stock_financial_analysis_indicator(self, symbol="000001"):
-        """财务指标分析(各类比率)"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_financial_analysis_indicator(symbol=symbol)
+        # south = ak.stock_hsgt_fund_min_em(symbol="南向资金")
+        # with open(_md, "a", encoding="utf-8") as f:
+        #     f.write("\n# 南向资金\n")
+        #     f.write("\n")
+        #     f.write(south.to_markdown(index=False, tablefmt="github"))
 
-    def stock_yjyg_em(self, date="20231231"):
-        """业绩预告"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_yjyg_em(date=date)
 
-    # === 3. 估值指标 ===
-    def stock_a_indicator_lg(self, symbol="000001"):
-        """个股市盈率、市净率历史数据(乐咕乐股)"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_a_indicator_lg(symbol=symbol)
+        stock_hsgt_board_rank_em_df = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="今日")
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write("\n# 北向资金增持行业板块排行\n")
+            f.write("\n")
+            f.write(stock_hsgt_board_rank_em_df.to_markdown(index=False, tablefmt="github"))
 
-    def stock_a_gxl_lg(self, symbol="000001"):
-        """个股股息率历史数据"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_a_gxl_lg(symbol=symbol)
+        fund_etf_spot_ths_df = ak.fund_etf_spot_ths(date="20260302")
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write("\n# 同花顺 ETF 行情\n")
+            f.write("\n")
+            f.write(fund_etf_spot_ths_df.to_markdown(index=False, tablefmt="github"))
 
-    # === 4. 资金流向与市场情绪 ===
-    def stock_individual_fund_flow(self, symbol="000001", market="sz"):
-        """个股资金流向"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_individual_fund_flow(stock=symbol, market=market)
-
-    def stock_hsgt_hold_stock_em(self, symbol="北向持股", date="20240101"):
-        """沪深港通持股详情"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_hsgt_hold_stock_em(market=symbol, date=date)
-
-    def stock_lhb_detail_daily_sina(self, date="20240101"):
-        """龙虎榜-每日详情"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_lhb_detail_daily_sina(date=date)
-
-    # === 5. 股东与机构动向 ===
-    def stock_gdfx_top_10_em(self, symbol="sz000001", date="20231231"):
-        """十大股东分析"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_gdfx_top_10_em(symbol=symbol, date=date)
-
-    def stock_jgdy_detail_em(self, date="20231231"):
-        """机构调研详情"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_jgdy_detail_em(date=date)
-
-    # === 6. 行业背景 ===
-    def stock_board_industry_cons_em(self, symbol="小金属"):
-        """行业板块成分股"""
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        # return ak.stock_board_industry_cons_em(symbol=symbol)
-
-    def my_stock_zh_index_daily(self):
+    def update(self):
         func_name = _get_func_name()
         logger.info(f"executing function : {func_name}")
         csi300_codes = self._get_csi300_codes()
