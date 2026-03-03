@@ -13,6 +13,8 @@ import random
 from pathlib import Path
 from datetime import datetime
 from pprint import pprint
+import pandas_market_calendars as mcal
+from datetime import datetime, timedelta
 
 # 1. 获取当前时间
 now = datetime.now()
@@ -43,13 +45,18 @@ class StockAnalyzer:
     def _get_csi500_codes(self):
         return ak.index_stock_cons_csindex(symbol="000500")["成分券代码"].unique()
 
-    def board(self):
-        func_name = _get_func_name()
-        logger.info(f"executing function : {func_name}")
-        _md = f"{a_stock_dir}/{func_name}.md"
-        with open(_md, "w", encoding="utf-8") as f:
-            pass
+    def _get_recent_trade_days(self, window=5):
+        sse = mcal.get_calendar('SSE')
+        now = datetime.now()
+        end_date = now.strftime('%Y-%m-%d')
 
+        start_date = (now - timedelta(days=20)).strftime('%Y-%m-%d')
+        schedule = sse.schedule(start_date=start_date, end_date=end_date)
+
+        all_trading_days = schedule.index.strftime('%Y%m%d').tolist()
+        return all_trading_days[-window:]
+
+    def _get_board(self):
         stock_board_industry_summary_ths_df = ak.stock_board_industry_summary_ths()
         df = stock_board_industry_summary_ths_df
         top_gainers = df.nlargest(8, '涨跌幅')
@@ -58,12 +65,10 @@ class StockAnalyzer:
         final_selection = pd.concat([top_gainers, top_losers, top_volume]).drop_duplicates(subset=['板块'])
         final_selection = final_selection.sort_values(by='涨跌幅', ascending=False)
         core_columns = ['板块', '涨跌幅', '总成交额', '净流入', '上涨家数', '下跌家数', '领涨股', '领涨股-涨跌幅']
-        llm_input = final_selection[core_columns]
-        with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 同花顺 板块行情: 涨幅前 8 名 + 跌幅前 8 名 + 成交额最大的 4 个行业\n")
-            f.write("\n")
-            f.write(llm_input.to_markdown(index=False, tablefmt="github"))
+        _ret = final_selection[core_columns]
+        return _ret
 
+    def _get_north_money(self):
         try:
             df_1d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="今日")
             df_3d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="3日")
@@ -126,15 +131,11 @@ class StockAnalyzer:
         if not final_df.empty:
             # 优先排“黄金坑”和“强力进攻”，这些更有短线爆发力
             final_df = final_df.sort_values(by=['进攻动能', '今日流入(亿)'], ascending=False).head(12)
+        return final_df
 
-
-        with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 北向资金【脱水精华】分析快照\n")
-            f.write("\n")
-            f.write(final_df.to_markdown(index=False, tablefmt="github"))
-
-        df_etf = ak.fund_etf_spot_ths(date="20260302")
-
+    def _get_etf(self):
+        least = self._get_recent_trade_days(1)
+        df_etf = ak.fund_etf_spot_ths(date=least[0])
         # 2. 数据清洗与类型转换
         # 将百分比和数值字符串转换为 float，处理可能的空值
         df_etf['增长率'] = pd.to_numeric(df_etf['增长率'], errors='coerce').fillna(0)
@@ -176,11 +177,33 @@ class StockAnalyzer:
 
         # 5. 排序：按增长率升序排列（先看跌深的黄金坑，再看领涨品种）
         final_report = final_report.sort_values(by='增长率', ascending=True)
+        return final_report
 
+    def smart_money(self):
+        func_name = _get_func_name()
+        logger.info(f"executing function : {func_name}")
+        _md = f"{a_stock_dir}/{func_name}.md"
+        with open(_md, "w", encoding="utf-8") as f:
+            pass
+
+        board_df = self._get_board()
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write("\n# 同花顺 板块行情: 涨幅前 8 名 + 跌幅前 8 名 + 成交额最大的 4 个行业\n")
+            f.write("\n")
+            f.write(board_df.to_markdown(index=False, tablefmt="github"))
+
+        north_df = self._get_north_money()
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write("\n# 北向资金【脱水精华】分析快照\n")
+            f.write("\n")
+            f.write(north_df.to_markdown(index=False, tablefmt="github"))
+
+
+        etf_df = self._get_etf()
         with open(_md, "a", encoding="utf-8") as f:
             f.write("\n# 同花顺 ETF 行情\n")
             f.write("\n")
-            f.write(final_report.to_markdown(index=False, tablefmt="github"))
+            f.write(etf_df.to_markdown(index=False, tablefmt="github"))
 
     def update(self):
         func_name = _get_func_name()

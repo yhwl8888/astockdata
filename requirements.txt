@@ -9,3 +9,6 @@ loguru
 requests
 urllib3
 retrying
+
+
+pandas_market_calendars
