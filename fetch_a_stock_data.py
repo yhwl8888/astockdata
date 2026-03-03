@@ -47,39 +47,94 @@ class StockAnalyzer:
         func_name = _get_func_name()
         logger.info(f"executing function : {func_name}")
         _md = f"{a_stock_dir}/{func_name}.md"
-
-        spot = ak.stock_sector_spot()
         with open(_md, "w", encoding="utf-8") as f:
-            f.write("# sina 板块行情\n")
-            f.write("\n")
-            f.write(spot.to_markdown(index=False, tablefmt="github"))
+            pass
 
         stock_board_industry_summary_ths_df = ak.stock_board_industry_summary_ths()
+        df = stock_board_industry_summary_ths_df
+        top_gainers = df.nlargest(8, '涨跌幅')
+        top_losers = df.nsmallest(8, '涨跌幅')
+        top_volume = df.nlargest(4, '总成交额')
+        final_selection = pd.concat([top_gainers, top_losers, top_volume]).drop_duplicates(subset=['板块'])
+        final_selection = final_selection.sort_values(by='涨跌幅', ascending=False)
+        core_columns = ['板块', '涨跌幅', '总成交额', '净流入', '上涨家数', '下跌家数', '领涨股', '领涨股-涨跌幅']
+        llm_input = final_selection[core_columns]
         with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 同花顺 板块行情\n")
+            f.write("\n# 同花顺 板块行情: 涨幅前 8 名 + 跌幅前 8 名 + 成交额最大的 4 个行业\n")
             f.write("\n")
-            f.write(stock_board_industry_summary_ths_df.to_markdown(index=False, tablefmt="github"))
+            f.write(llm_input.to_markdown(index=False, tablefmt="github"))
 
-        # north = ak.stock_hsgt_fund_min_em(symbol="北向资金")
-        # with open(_md, "a", encoding="utf-8") as f:
-        #     f.write("\n# 北向资金\n")
-        #     f.write("\n")
-        #     f.write(north.to_markdown(index=False, tablefmt="github"))
+        try:
+            df_1d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="今日")
+            df_3d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="3日")
+            df_5d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="5日")
+            df_10d = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="10日")
+        except Exception as e:
+            print(f"数据获取失败: {e}")
+            df_1d = df_3d = df_5d = df_10d = pd.DataFrame()  # 确保后续代码能运行
 
-        # south = ak.stock_hsgt_fund_min_em(symbol="南向资金")
-        # with open(_md, "a", encoding="utf-8") as f:
-        #     f.write("\n# 南向资金\n")
-        #     f.write("\n")
-        #     f.write(south.to_markdown(index=False, tablefmt="github"))
+        dfs = {'1D': df_1d, '3D': df_3d, '5D': df_5d, '10D': df_10d}
+        core_col = '北向资金今日增持估计-市值'
+
+        # 1. 预处理：统一索引并清洗数据
+        for key in dfs:
+            dfs[key] = dfs[key].set_index('名称')
+            # 确保数值化，处理可能的空值
+            dfs[key][core_col] = pd.to_numeric(dfs[key][core_col], errors='coerce').fillna(0)
+
+        # 2. 获取所有出现在 1D 榜单中的候选板块
+        all_candidates = df_1d['名称'].unique()
+        summary_list = []
+
+        for name in all_candidates:
+            try:
+                # 基础指标
+                price_1d = dfs['1D'].loc[name, '最新涨跌幅']
+                v1 = dfs['1D'].loc[name, core_col]
+                v3 = dfs['3D'].loc[name, core_col] if name in dfs['3D'].index else 0
+                v5 = dfs['5D'].loc[name, core_col] if name in dfs['5D'].index else 0
+                v10 = dfs['10D'].loc[name, core_col] if name in dfs['10D'].index else 0
+
+                # 计算一致性（上榜次数）
+                consistency = sum([name in dfs[k].index for k in dfs])
+
+                # 计算进攻动能 (今日买入 vs 近期日均)
+                avg_recent = (v5 / 5) if v5 > 0 else (v1 / 1)
+                momentum = round(v1 / avg_recent, 2) if avg_recent > 0 else 0
+
+                # --- 核心过滤逻辑 (只留以下三种情况) ---
+                is_strong_attack = (v1 > 5e8 and momentum > 1.2)  # 1. 强力进攻：买入超5亿且在加速
+                is_gold_pit = (price_1d < -2.0 and v1 > 2e8)      # 2. 黄金坑：大跌超过2%但外资买入超2亿
+                is_long_term = (consistency >= 3 and v10 > 10e8)  # 3. 长线基调：至少3次上榜且10日买入超10亿
+
+                if is_strong_attack or is_gold_pit or is_long_term:
+                    summary_list.append({
+                        "板块": name,
+                        "今日涨跌%": price_1d,
+                        "今日流入(亿)": round(v1 / 1e8, 2),
+                        "10日总流入(亿)": round(v10 / 1e8, 2),
+                        "进攻动能": momentum,
+                        "稳定性": f"{consistency}/4",
+                        "性质": "强力进攻" if is_strong_attack else ("黄金坑" if is_gold_pit else "长线核心"),
+                        "领涨/增持股": dfs['1D'].loc[name, '今日增持最大股-市值']
+                    })
+            except:
+                continue
+
+        # 3. 排序并只取前 12 名（最精华的部分）
+        final_df = pd.DataFrame(summary_list)
+        if not final_df.empty:
+            # 优先排“黄金坑”和“强力进攻”，这些更有短线爆发力
+            final_df = final_df.sort_values(by=['进攻动能', '今日流入(亿)'], ascending=False).head(12)
 
 
-        stock_hsgt_board_rank_em_df = ak.stock_hsgt_board_rank_em(symbol="北向资金增持行业板块排行", indicator="今日")
         with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 北向资金增持行业板块排行\n")
+            f.write("\n# 北向资金【脱水精华】分析快照\n")
             f.write("\n")
-            f.write(stock_hsgt_board_rank_em_df.to_markdown(index=False, tablefmt="github"))
+            f.write(final_df.to_markdown(index=False, tablefmt="github"))
+        return
 
-        fund_etf_spot_ths_df = ak.fund_etf_spot_ths(date="20260302")
+        fund_etf_spot_ths_df = ak.fund_etf_spot_ths(date="20260303")
         with open(_md, "a", encoding="utf-8") as f:
             f.write("\n# 同花顺 ETF 行情\n")
             f.write("\n")
