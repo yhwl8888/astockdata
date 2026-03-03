@@ -132,13 +132,55 @@ class StockAnalyzer:
             f.write("\n# 北向资金【脱水精华】分析快照\n")
             f.write("\n")
             f.write(final_df.to_markdown(index=False, tablefmt="github"))
-        return
 
-        fund_etf_spot_ths_df = ak.fund_etf_spot_ths(date="20260303")
+        df_etf = ak.fund_etf_spot_ths(date="20260302")
+
+        # 2. 数据清洗与类型转换
+        # 将百分比和数值字符串转换为 float，处理可能的空值
+        df_etf['增长率'] = pd.to_numeric(df_etf['增长率'], errors='coerce').fillna(0)
+        df_etf['当前-单位净值'] = pd.to_numeric(df_etf['当前-单位净值'], errors='coerce').fillna(0)
+        df_etf['前一日-单位净值'] = pd.to_numeric(df_etf['前一日-单位净值'], errors='coerce').fillna(0)
+
+        # 3. 核心过滤逻辑：三道防火墙
+        # 第一道：申赎状态过滤 (剔除不可交易的品种)
+        # 只保留“开放申购”和“开放赎回”的基金，避免 LLM 分析无法买入的标的
+        mask_open = (df_etf['申购状态'].str.contains('开放', na=False)) & \
+                    (df_etf['赎回状态'].str.contains('开放', na=False))
+        df_active = df_etf[mask_open].copy()
+
+        # 第二道：极端波动筛选 (捕捉市场最强信号)
+        # 选取今日增长率最高的前 8 名（领涨强力品种）
+        # 选取今日增长率最低的前 8 名（潜在的“黄金坑”超跌反弹品种）
+        top_gainers = df_active.nlargest(8, '增长率')
+        top_losers = df_active.nsmallest(8, '增长率')
+
+        # 第三道：类型聚焦 (可选)
+        # 如果你只关注股票型或指数型，可以取消下面这行的注释
+        # df_active = df_active[df_active['基金类型'].str.contains('指数|股票', na=False)]
+
+        # 合并结果并去重
+        df_final = pd.concat([top_gainers, top_losers]).drop_duplicates()
+
+        # 4. 字段瘦身与单位转化 (节省 LLM Token)
+        # 丢弃重复的“最新-单位净值”和冗余的“序号”、“查询日期”
+        keep_cols = [
+            '基金代码', '基金名称', '当前-单位净值', 
+            '增长率', '基金类型', '最新-交易日'
+        ]
+
+        # 如果表头中存在“增长值”，也保留用于辅助判断绝对强度
+        if '增长值' in df_active.columns:
+            keep_cols.insert(4, '增长值')
+
+        final_report = df_final[keep_cols].copy()
+
+        # 5. 排序：按增长率升序排列（先看跌深的黄金坑，再看领涨品种）
+        final_report = final_report.sort_values(by='增长率', ascending=True)
+
         with open(_md, "a", encoding="utf-8") as f:
             f.write("\n# 同花顺 ETF 行情\n")
             f.write("\n")
-            f.write(fund_etf_spot_ths_df.to_markdown(index=False, tablefmt="github"))
+            f.write(final_report.to_markdown(index=False, tablefmt="github"))
 
     def update(self):
         func_name = _get_func_name()
