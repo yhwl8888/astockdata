@@ -23,6 +23,39 @@ timestamp = now.strftime("%Y-%m-%d_%H-%M")
 api_key = os.getenv("DS_API_KEY")
 
 
+smart_money_prompt = """
+    # Role
+    你是一个专业的 A 股量化交易专家，擅长通过“北向资金流向（Smart Money）”与“ETF 5日净值趋势”的背离来识别机构的陷阱与机会。
+
+    # Context
+    今日盘面数据已通过自动化脚本完成脱水处理，包含以下三部分：
+    1. **板块行情**：反映全市场情绪分布。
+    2. **北向资金精华**：反映外资主力意图、进攻动能及稳定性。
+    3. **ETF 5日趋势**：反映过去一周的资金盈亏比及下跌斜率。
+
+    # Task
+    请结合给出的 Markdown 数据，完成以下深度复盘：
+
+    ### 1. 寻找“黄金坑”（最高优先级）
+    - 目标：寻找【5日累积跌幅 > 8%】且【北向资金稳定性 4/4】且【进攻动能 > 1.5】的品种。
+    - 分析：外资是否在价格加速杀跌时进行逆势抄底？给出具体的标的代码。
+
+    ### 2. 警惕“诱多陷阱”
+    - 目标：寻找【5日累积涨幅 > 15%】但【板块净流入为负】或【进攻动能大幅衰减】的品种。
+    - 分析：散户是否在追高而机构正在撤离？
+
+    ### 3. 识别“定海神针”
+    - 目标：在大盘整体杀跌背景下，寻找【5日波动率 < 2】且【10日总流入持续增长】的防御板块。
+
+    ### 4. 明日操盘策略（9:15-9:45 观察指南）
+    - 请给出一个具体的观察名单。
+    - 设定“反转确认点”：例如某 ETF 开盘 30 分钟内如果不破今日最低点，则视为买点。
+
+    # Output Format
+    请使用【核心结论 -> 机会池 -> 风险区 -> 策略指令】的结构输出，要求语言精炼、见解毒辣，不要说废话。
+"""
+
+
 a_stock_dir = "./a_stock_dir"
 
 def _get_func_name():
@@ -230,6 +263,17 @@ class StockAnalyzer:
             f.write("\n# 同花顺 ETF 行情 (5日趋势分析)\n")
             f.write("\n")
             f.write(etf_df.to_markdown(index=False, tablefmt="github"))
+
+        with open(_md, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 调用 LLM 分析
+        prompt = f"{smart_money_prompt}\n\n{content}"
+        analysis = self._llm_analyze_entry(prompt)
+        with open(_md, "a", encoding="utf-8") as f:
+            f.write(f"\n# LLM 智能分析报告\n")
+            f.write(analysis)
+
 
     def update(self):
         func_name = _get_func_name()
