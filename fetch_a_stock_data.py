@@ -54,7 +54,14 @@ class StockAnalyzer:
         schedule = sse.schedule(start_date=start_date, end_date=end_date)
 
         all_trading_days = schedule.index.strftime('%Y%m%d').tolist()
-        return all_trading_days[-window:]
+        if now.hour < 20:
+            # 如果还不到晚上 8 点，可能今天的数据还是 0，保守起见取到昨天为止的 5 天
+            # 如果今天还没收盘或没结算，all_trading_days 可能包含今天
+            result = [d for d in all_trading_days if d < now.strftime('%Y%m%d')]
+            return result[-window:]
+        else:
+            # 晚上 8 点后，认为今日数据已出齐
+            return all_trading_days[-window:]
 
     def _get_board(self):
         stock_board_industry_summary_ths_df = ak.stock_board_industry_summary_ths()
@@ -134,50 +141,69 @@ class StockAnalyzer:
         return final_df
 
     def _get_etf(self):
-        least = self._get_recent_trade_days(1)
-        df_etf = ak.fund_etf_spot_ths(date=least[0])
-        # 2. 数据清洗与类型转换
-        # 将百分比和数值字符串转换为 float，处理可能的空值
-        df_etf['增长率'] = pd.to_numeric(df_etf['增长率'], errors='coerce').fillna(0)
-        df_etf['当前-单位净值'] = pd.to_numeric(df_etf['当前-单位净值'], errors='coerce').fillna(0)
-        df_etf['前一日-单位净值'] = pd.to_numeric(df_etf['前一日-单位净值'], errors='coerce').fillna(0)
+        # 1. 获取过去 5 个交易日日期序列
+        trade_days = self._get_recent_trade_days(5)
+        all_dfs = []
+        
+        logger.info(f"正在回溯 5 日 ETF 数据: {trade_days}")
 
-        # 3. 核心过滤逻辑：三道防火墙
-        # 第一道：申赎状态过滤 (剔除不可交易的品种)
-        # 只保留“开放申购”和“开放赎回”的基金，避免 LLM 分析无法买入的标的
-        mask_open = (df_etf['申购状态'].str.contains('开放', na=False)) & \
-                    (df_etf['赎回状态'].str.contains('开放', na=False))
-        df_active = df_etf[mask_open].copy()
+        # 2. 循环获取每一天的数据并进行横向合并
+        for date_str in trade_days:
+            try:
+                # 调用 akshare 获取当日快照
+                df_daily = ak.fund_etf_spot_ths(date=date_str)
+                
+                # 数据清洗：确保数值类型
+                df_daily['增长率'] = pd.to_numeric(df_daily['增长率'], errors='coerce').fillna(0)
+                df_daily['当前-单位净值'] = pd.to_numeric(df_daily['当前-单位净值'], errors='coerce').fillna(0)
+                
+                # 提取关键列，重命名增长率以区分日期
+                df_sub = df_daily[['基金代码', '基金名称', '增长率', '当前-单位净值', '申购状态', '赎回状态', '基金类型']]
+                df_sub = df_sub.rename(columns={'增长率': f'pct_{date_str}'})
+                
+                # 设置索引以便合并
+                all_dfs.append(df_sub.set_index(['基金代码', '基金名称', '基金类型', '申购状态', '赎回状态']))
+            except Exception as e:
+                logger.warning(f"日期 {date_str} 数据获取失败: {e}")
+                continue
 
-        # 第二道：极端波动筛选 (捕捉市场最强信号)
-        # 选取今日增长率最高的前 8 名（领涨强力品种）
-        # 选取今日增长率最低的前 8 名（潜在的“黄金坑”超跌反弹品种）
-        top_gainers = df_active.nlargest(8, '增长率')
-        top_losers = df_active.nsmallest(8, '增长率')
+        if not all_dfs:
+            return pd.DataFrame()
 
-        # 第三道：类型聚焦 (可选)
-        # 如果你只关注股票型或指数型，可以取消下面这行的注释
-        # df_active = df_active[df_active['基金类型'].str.contains('指数|股票', na=False)]
+        # 3. 合并数据：只保留 5 天内都活跃的基金
+        df_merged = pd.concat(all_dfs, axis=1, join='inner').reset_index()
 
-        # 合并结果并去重
-        df_final = pd.concat([top_gainers, top_losers]).drop_duplicates()
+        # 4. 计算 5 日累积指标
+        pct_cols = [col for col in df_merged.columns if col.startswith('pct_')]
+        df_merged['5日累积涨跌'] = df_merged[pct_cols].sum(axis=1).round(2)
+        
+        # 计算 5 日波动标准差（衡量稳定性）
+        df_merged['5日波动率'] = df_merged[pct_cols].std(axis=1).round(2)
 
-        # 4. 字段瘦身与单位转化 (节省 LLM Token)
-        # 丢弃重复的“最新-单位净值”和冗余的“序号”、“查询日期”
-        keep_cols = [
-            '基金代码', '基金名称', '当前-单位净值', 
-            '增长率', '基金类型', '最新-交易日'
-        ]
+        # 5. 执行“防火墙”过滤
+        # 第一道：申赎状态过滤 (必须开放)
+        mask_open = (df_merged['申购状态'].str.contains('开放', na=False)) & \
+                    (df_merged['赎回状态'].str.contains('开放', na=False))
+        df_active = df_merged[mask_open].copy()
 
-        # 如果表头中存在“增长值”，也保留用于辅助判断绝对强度
-        if '增长值' in df_active.columns:
-            keep_cols.insert(4, '增长值')
+        # 第二道：聚焦股票/指数型，排除干扰项
+        df_active = df_active[df_active['基金类型'].str.contains('股票|指数|景气', na=False)]
 
-        final_report = df_final[keep_cols].copy()
+        # 第三道：多维度异动筛选
+        latest_col = pct_cols[-1]
+        # 筛选：5日超跌（寻找黄金坑）
+        top_5d_losers = df_active.nsmallest(6, '5日累积涨跌')
+        # 筛选：今日强势（寻找爆发力）
+        top_1d_gainers = df_active.nlargest(6, latest_col)
+        # 筛选：5日抗跌（寻找抱团标的）
+        stable_strong = df_active[df_active['5日累积涨跌'] > -1.0].nlargest(4, latest_col)
 
-        # 5. 排序：按增长率升序排列（先看跌深的黄金坑，再看领涨品种）
-        final_report = final_report.sort_values(by='增长率', ascending=True)
-        return final_report
+        # 6. 合并最终报告
+        df_final = pd.concat([top_5d_losers, top_1d_gainers, stable_strong]).drop_duplicates(subset=['基金代码'])
+        
+        # 字段精简：保留代码、名称、5日累积、今日表现、当前净值
+        final_cols = ['基金代码', '基金名称', '5日累积涨跌', latest_col, '当前-单位净值', '5日波动率']
+        return df_final[final_cols].sort_values(by='5日累积涨跌')
 
     def smart_money(self):
         func_name = _get_func_name()
@@ -201,7 +227,7 @@ class StockAnalyzer:
 
         etf_df = self._get_etf()
         with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 同花顺 ETF 行情\n")
+            f.write("\n# 同花顺 ETF 行情 (5日趋势分析)\n")
             f.write("\n")
             f.write(etf_df.to_markdown(index=False, tablefmt="github"))
 
