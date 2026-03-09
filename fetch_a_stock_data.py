@@ -99,9 +99,9 @@ class StockAnalyzer:
     def _get_board(self):
         stock_board_industry_summary_ths_df = ak.stock_board_industry_summary_ths()
         df = stock_board_industry_summary_ths_df
-        top_gainers = df.nlargest(8, '涨跌幅')
-        top_losers = df.nsmallest(8, '涨跌幅')
-        top_volume = df.nlargest(4, '总成交额')
+        top_gainers = df.nlargest(10, '涨跌幅')
+        top_losers = df.nsmallest(10, '涨跌幅')
+        top_volume = df.nlargest(10, '总成交额')
         final_selection = pd.concat([top_gainers, top_losers, top_volume]).drop_duplicates(subset=['板块'])
         final_selection = final_selection.sort_values(by='涨跌幅', ascending=False)
         core_columns = ['板块', '涨跌幅', '总成交额', '净流入', '上涨家数', '下跌家数', '领涨股', '领涨股-涨跌幅']
@@ -152,7 +152,7 @@ class StockAnalyzer:
                 is_gold_pit = (price_1d < -2.0 and v1 > 2e8)      # 2. 黄金坑：大跌超过2%但外资买入超2亿
                 is_long_term = (consistency >= 3 and v10 > 10e8)  # 3. 长线基调：至少3次上榜且10日买入超10亿
 
-                if is_strong_attack or is_gold_pit or is_long_term:
+                if is_strong_attack or is_gold_pit or is_long_term or True:
                     summary_list.append({
                         "板块": name,
                         "今日涨跌%": price_1d,
@@ -247,7 +247,7 @@ class StockAnalyzer:
 
         board_df = self._get_board()
         with open(_md, "a", encoding="utf-8") as f:
-            f.write("\n# 同花顺 板块行情: 涨幅前 8 名 + 跌幅前 8 名 + 成交额最大的 4 个行业\n")
+            f.write("\n# 同花顺 板块行情: 涨幅前 10 名 + 跌幅前 10 名 + 成交额最大的 10 个行业\n")
             f.write("\n")
             f.write(board_df.to_markdown(index=False, tablefmt="github"))
 
